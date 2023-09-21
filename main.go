@@ -166,17 +166,14 @@ func getUnixfsNode(path string) (files.Node, error) {
 }
 
 // Initialize the IPFS repo
-func initRepo() error {
-	if _, err := os.Stat(".ipgit"); !os.IsNotExist(err) {
-		return fmt.Errorf(".ipgit directory already exists")
-	}
-	err := os.Mkdir(".ipgit", 0755)
+func (service *IPFSService) initRepo() error {
+	repoPath, err := service.createTempRepo()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to initialize repo: %w", err)
 	}
-	err = os.WriteFile(".ipgit/commit_log.json", []byte("[]"), 0644)
-	if err != nil {
-		return err
+
+	if err := os.WriteFile(filepath.Join(repoPath, "commit_log.json"), []byte("[]"), 0644); err != nil {
+		return fmt.Errorf("failed to write commit log: %w", err)
 	}
 	return nil
 }
@@ -367,19 +364,17 @@ func readUnixfsContent(node files.Node) (*bytes.Buffer, error) {
 	return &buf, nil
 }
 
-func executeCommand(cmd string, options []string, ipfs icore.CoreAPI, ctx context.Context) error {
+func executeCommand(cmd string, options []string, ipfs icore.CoreAPI, service *IPFSService, ctx context.Context) error {
+	if len(options) < 1 && (cmd == "add" || cmd == "commit" || cmd == "diff" || cmd == "clone") {
+		return fmt.Errorf("please specify the required argument for %s", cmd)
+	}
+
 	switch cmd {
 	case "init":
-		return initRepo()
+		return service.initRepo()
 	case "add":
-		if len(options) < 1 {
-			return fmt.Errorf("please specify a file to add")
-		}
 		return addFile(options[0], ipfs, ctx)
 	case "commit":
-		if len(options) < 1 {
-			return fmt.Errorf("please specify a commit message")
-		}
 		return commit(ipfs, options[0], ctx)
 	case "status":
 		return status(ipfs, ctx)
@@ -418,9 +413,11 @@ func executeCommand(cmd string, options []string, ipfs icore.CoreAPI, ctx contex
 }
 
 func main() {
+	// Create a context that you can cancel
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	defer cancel() // Cancel the context when main returns
 
+	// Parse command-line arguments
 	args := os.Args[1:]
 	if len(args) == 0 {
 		fmt.Println("Available commands: init, add, commit, status, log, diff, clone")
@@ -430,28 +427,30 @@ func main() {
 	cmd := args[0]
 	options := args[1:]
 
-	// If the command is 'init', run it before trying to spawn an IPFS node
+	// Create an IPFSService instance
+	ipfsService := NewIPFSService(false) // Set experimental to true if needed
+
+	// Handle the 'init' command separately
 	if cmd == "init" {
-		if err := initRepo(); err != nil {
+		if err := ipfsService.initRepo(); err != nil {
 			log.Fatal(err)
 		}
 		return
 	}
 
-	// If .ipgit doesn't exist, initialize it
+	// Check if the repository is initialized; if not, initialize it
 	if _, err := os.Stat(".ipgit"); os.IsNotExist(err) {
-		if err := initRepo(); err != nil {
+		if err := ipfsService.initRepo(); err != nil {
 			log.Fatal(err)
 		}
 	}
 
+	// Declare a variable for the CoreAPI
 	var ipfs icore.CoreAPI
 
-	// Create IPFSService and initialize IPFS node
-	ipfsService := NewIPFSService(false) // Set experimental to true if needed
-
-	// Check if a local IPFS repo exists; if not, create an ephemeral one.
+	// Check if a local IPFS repo exists; if not, create an ephemeral one
 	if _, err := os.Stat(".ipgit"); os.IsNotExist(err) {
+		var err error
 		ipfs, _, err = ipfsService.spawnEphemeral(ctx)
 		if err != nil {
 			log.Fatal("Failed to spawn ephemeral IPFS node: ", err)
@@ -478,7 +477,7 @@ func main() {
 		}
 	}
 
-	// Allow the init command to run even if .ipgit directory exists
+	// Verify if the repository is initialized before proceeding
 	if cmd != "init" {
 		if _, err := os.Stat(".ipgit"); os.IsNotExist(err) {
 			fmt.Println("Not an ipgit repository. Please initialize the repository using 'ipgit init'")
@@ -486,7 +485,8 @@ func main() {
 		}
 	}
 
-	if err := executeCommand(cmd, options, ipfs, ctx); err != nil {
+	// Execute the command
+	if err := executeCommand(cmd, options, ipfs, ipfsService, ctx); err != nil {
 		log.Fatal(err)
 	}
 }
