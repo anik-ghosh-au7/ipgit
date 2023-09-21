@@ -258,7 +258,7 @@ func commit(ipfs icore.CoreAPI, message string, ctx context.Context) error {
 func status(ipfs icore.CoreAPI, ctx context.Context) error {
 	latestCommit, err := loadCommits()
 	if err != nil || len(latestCommit) == 0 {
-		return fmt.Errorf("No commits found")
+		return fmt.Errorf("no commits found")
 	}
 	for file, cid := range latestCommit[0].Files {
 		fileNode, err := getUnixfsNode(file)
@@ -295,7 +295,7 @@ func diff(ipfs icore.CoreAPI, file string, ctx context.Context) error {
 		return err
 	}
 	if len(commits) < 2 {
-		return fmt.Errorf("Not enough commits for diff")
+		return fmt.Errorf("not enough commits for diff")
 	}
 	latestCID := commits[0].Files[file]
 	prevCID := commits[1].Files[file]
@@ -315,7 +315,7 @@ func diff(ipfs icore.CoreAPI, file string, ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if bytes.Compare(latestContent.Bytes(), prevContent.Bytes()) == 0 {
+	if bytes.Equal(latestContent.Bytes(), prevContent.Bytes()) {
 		fmt.Println("No changes.")
 	} else {
 		fmt.Println("Files differ.")
