@@ -354,31 +354,43 @@ func readUnixfsContent(node files.Node) (*bytes.Buffer, error) {
 	return &buf, nil
 }
 
-func main() {
-	// Initialize an IPFS node (this is simplified; see your original example for a full version)
-	r, err := fsrepo.Open("~/.ipfs")
-	if err != nil {
-		log.Fatal(err)
+func executeCommand(cmd string, options []string, ipfs icore.CoreAPI, ctx context.Context) error {
+	switch cmd {
+	case "init":
+		return initRepo()
+	case "add":
+		if len(options) < 1 {
+			return fmt.Errorf("please specify a file to add")
+		}
+		return addFile(options[0], ipfs, ctx)
+	case "commit":
+		if len(options) < 1 {
+			return fmt.Errorf("please specify a commit message")
+		}
+		return commit(ipfs, options[0], ctx)
+	case "status":
+		return status(ipfs, ctx)
+	case "log":
+		return viewLog()
+	case "diff":
+		if len(options) < 1 {
+			return fmt.Errorf("please specify a file to diff")
+		}
+		return diff(ipfs, options[0], ctx)
+	case "clone":
+		if len(options) < 1 {
+			return fmt.Errorf("please specify a CID to clone")
+		}
+		return clone(ipfs, options[0], ctx)
+	default:
+		return fmt.Errorf("unknown command: %s", cmd)
 	}
+}
 
+func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	cfg := &core.BuildCfg{
-		Repo: r,
-	}
-
-	node, err := core.NewNode(ctx, cfg)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	ipfs, err := coreapi.NewCoreAPI(node)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// Assume the command is the first argument and options are the rest
 	args := os.Args[1:]
 	if len(args) == 0 {
 		fmt.Println("Available commands: init, add, commit, status, log, diff, clone")
@@ -388,6 +400,39 @@ func main() {
 	cmd := args[0]
 	options := args[1:]
 
+	var ipfs icore.CoreAPI
+
+	// Create IPFSService and initialize IPFS node
+	ipfsService := NewIPFSService(false) // Set experimental to true if needed
+
+	// Check if a local IPFS repo exists; if not, create an ephemeral one.
+	if _, err := os.Stat("~/.ipfs"); os.IsNotExist(err) {
+		ipfs, _, err = ipfsService.spawnEphemeral(ctx)
+		if err != nil {
+			log.Fatal("Failed to spawn ephemeral IPFS node: ", err)
+		}
+	} else {
+		// Open existing IPFS repo
+		r, err := fsrepo.Open("~/.ipfs")
+		if err != nil {
+			log.Fatal("Failed to open existing IPFS repo: ", err)
+		}
+
+		cfg := &core.BuildCfg{
+			Repo: r,
+		}
+
+		node, err := core.NewNode(ctx, cfg)
+		if err != nil {
+			log.Fatal("Failed to create new IPFS node: ", err)
+		}
+
+		ipfs, err = coreapi.NewCoreAPI(node)
+		if err != nil {
+			log.Fatal("Failed to create new Core API: ", err)
+		}
+	}
+
 	// Allow the init command to run even if .ipgit directory exists
 	if cmd != "init" {
 		if _, err := os.Stat(".ipgit"); os.IsNotExist(err) {
@@ -396,38 +441,7 @@ func main() {
 		}
 	}
 
-	switch cmd {
-	case "init":
-		err = initRepo()
-	case "add":
-		if len(options) < 1 {
-			log.Fatal("Please specify a file to add")
-		}
-		err = addFile(options[0], ipfs, ctx)
-	case "commit":
-		if len(options) < 1 {
-			log.Fatal("Please specify a commit message")
-		}
-		err = commit(ipfs, options[0], ctx)
-	case "status":
-		err = status(ipfs, ctx)
-	case "log":
-		err = viewLog()
-	case "diff":
-		if len(options) < 1 {
-			log.Fatal("Please specify a file to diff")
-		}
-		err = diff(ipfs, options[0], ctx)
-	case "clone":
-		if len(options) < 1 {
-			log.Fatal("Please specify a CID to clone")
-		}
-		err = clone(ipfs, options[0], ctx)
-	default:
-		log.Fatalf("Unknown command: %s", cmd)
-	}
-
-	if err != nil {
+	if err := executeCommand(cmd, options, ipfs, ctx); err != nil {
 		log.Fatal(err)
 	}
 }
