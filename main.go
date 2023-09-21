@@ -60,24 +60,34 @@ func (service *IPFSService) setupPlugins(externalPluginsPath string) error {
 }
 
 func (service *IPFSService) createTempRepo() (string, error) {
-	repoPath, err := os.MkdirTemp("./repo", "ipfs-shell")
-	if err != nil {
-		return "", fmt.Errorf("failed to get temp dir: %s", err)
+	// Ensure that .ipgit exists
+	if _, err := os.Stat(".ipgit"); os.IsNotExist(err) {
+		err := os.MkdirAll(".ipgit", 0755)
+		if err != nil {
+			return "", fmt.Errorf("failed to create repo directory: %s", err)
+		}
 	}
-	cfg, err := config.Init(io.Discard, 2048)
-	if err != nil {
-		return "", err
+
+	repoPath := ".ipgit" // Use .ipgit as the repo path
+
+	// Check if the repo is already initialized, if not then initialize it
+	if !fsrepo.IsInitialized(repoPath) {
+		cfg, err := config.Init(io.Discard, 2048)
+		if err != nil {
+			return "", err
+		}
+		if service.experimental {
+			cfg.Experimental.FilestoreEnabled = true
+			cfg.Experimental.UrlstoreEnabled = true
+			cfg.Experimental.Libp2pStreamMounting = true
+			cfg.Experimental.P2pHttpProxy = true
+		}
+		err = fsrepo.Init(repoPath, cfg)
+		if err != nil {
+			return "", fmt.Errorf("failed to init ephemeral node: %s", err)
+		}
 	}
-	if service.experimental {
-		cfg.Experimental.FilestoreEnabled = true
-		cfg.Experimental.UrlstoreEnabled = true
-		cfg.Experimental.Libp2pStreamMounting = true
-		cfg.Experimental.P2pHttpProxy = true
-	}
-	err = fsrepo.Init(repoPath, cfg)
-	if err != nil {
-		return "", fmt.Errorf("failed to init ephemeral node: %s", err)
-	}
+
 	return repoPath, nil
 }
 
@@ -420,20 +430,35 @@ func main() {
 	cmd := args[0]
 	options := args[1:]
 
+	// If the command is 'init', run it before trying to spawn an IPFS node
+	if cmd == "init" {
+		if err := initRepo(); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
+	// If .ipgit doesn't exist, initialize it
+	if _, err := os.Stat(".ipgit"); os.IsNotExist(err) {
+		if err := initRepo(); err != nil {
+			log.Fatal(err)
+		}
+	}
+
 	var ipfs icore.CoreAPI
 
 	// Create IPFSService and initialize IPFS node
 	ipfsService := NewIPFSService(false) // Set experimental to true if needed
 
 	// Check if a local IPFS repo exists; if not, create an ephemeral one.
-	if _, err := os.Stat("~/.ipfs"); os.IsNotExist(err) {
+	if _, err := os.Stat(".ipgit"); os.IsNotExist(err) {
 		ipfs, _, err = ipfsService.spawnEphemeral(ctx)
 		if err != nil {
 			log.Fatal("Failed to spawn ephemeral IPFS node: ", err)
 		}
 	} else {
 		// Open existing IPFS repo
-		r, err := fsrepo.Open("~/.ipfs")
+		r, err := fsrepo.Open(".ipgit")
 		if err != nil {
 			log.Fatal("Failed to open existing IPFS repo: ", err)
 		}
