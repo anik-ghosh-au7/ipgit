@@ -9,7 +9,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -37,6 +36,23 @@ type Commit struct {
 type IPFSService struct {
 	experimental bool
 	pluginOnce   sync.Once
+}
+
+var examplePeers = []string{
+	// IPFS Bootstrapper nodes
+	"/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
+	"/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
+	"/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb",
+	"/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
+	// IPFS Cluster Pinning nodes
+	"/ip4/138.201.67.219/tcp/4001/p2p/QmUd6zHcbkbcs7SMxwLs48qZVX3vpcM8errYS7xEczwRMA",
+	"/ip4/138.201.67.219/udp/4001/quic/p2p/QmUd6zHcbkbcs7SMxwLs48qZVX3vpcM8errYS7xEczwRMA",
+	"/ip4/138.201.67.220/tcp/4001/p2p/QmNSYxZAiJHeLdkBg38roksAR9So7Y5eojks1yjEcUtZ7i",
+	"/ip4/138.201.67.220/udp/4001/quic/p2p/QmNSYxZAiJHeLdkBg38roksAR9So7Y5eojks1yjEcUtZ7i",
+	"/ip4/138.201.68.74/tcp/4001/p2p/QmdnXwLrC8p1ueiq2Qya8joNvk3TVVDAut7PrikmZwubtR",
+	"/ip4/138.201.68.74/udp/4001/quic/p2p/QmdnXwLrC8p1ueiq2Qya8joNvk3TVVDAut7PrikmZwubtR",
+	"/ip4/94.130.135.167/tcp/4001/p2p/QmUEMvxS2e7iDrereVYc5SWPauXPyNwxcy9BXZrC1QTcHE",
+	"/ip4/94.130.135.167/udp/4001/quic/p2p/QmUEMvxS2e7iDrereVYc5SWPauXPyNwxcy9BXZrC1QTcHE",
 }
 
 func NewIPFSService(experimental bool) *IPFSService {
@@ -206,6 +222,14 @@ func appendToLog(newCommit Commit) error {
 	return os.WriteFile(".ipgit/commit_log.json", data, 0644)
 }
 
+// Ensure that the staging file exists
+func ensureStagingExists() error {
+	if _, err := os.Stat(".ipgit/staging.json"); os.IsNotExist(err) {
+		return os.WriteFile(".ipgit/staging.json", []byte("{}"), 0644)
+	}
+	return nil
+}
+
 // Add a file to IPFS and the CID to the staging area
 func addFile(file string, ipfs icore.CoreAPI, ctx context.Context) error {
 	fileNode, err := getUnixfsNode(file)
@@ -216,15 +240,38 @@ func addFile(file string, ipfs icore.CoreAPI, ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	// Error handling for WriteFile
-	if err := os.WriteFile(".ipgit/staging_"+file, []byte(cidFile.Cid().String()), 0644); err != nil {
+
+	// Ensure staging.json exists
+	if err := ensureStagingExists(); err != nil {
 		return err
 	}
-	return nil
+
+	// Read the existing staging data
+	data, err := os.ReadFile(".ipgit/staging.json")
+	if err != nil {
+		return err
+	}
+	staging := make(map[string]string)
+	if err := json.Unmarshal(data, &staging); err != nil {
+		return err
+	}
+
+	// Add the new file's CID to the staging map and write it back
+	staging[file] = cidFile.Cid().String()
+	newData, err := json.Marshal(staging)
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(".ipgit/staging.json", newData, 0644)
 }
 
 // Commit changes
 func commit(ipfs icore.CoreAPI, message string, ctx context.Context) error {
+	// Ensure staging.json exists before trying to read it
+	if err := ensureStagingExists(); err != nil {
+		return err
+	}
 	// Load previous commits
 	prevCommits, err := loadCommits()
 	if err != nil {
@@ -240,19 +287,13 @@ func commit(ipfs icore.CoreAPI, message string, ctx context.Context) error {
 		newCommit.ParentCID = prevCommits[0].CID
 	}
 	// Read the staging area
-	files, err := filepath.Glob(".ipgit/staging_*")
+	staging, err := os.ReadFile(".ipgit/staging.json")
 	if err != nil {
-		return err // Added error handling
+		return err
 	}
-	for _, file := range files {
-		cid, err := os.ReadFile(file)
-		if err != nil {
-			return err // Added error handling
-		}
-		newCommit.Files[strings.TrimPrefix(file, ".ipgit/staging_")] = string(cid)
-		if err := os.Remove(file); err != nil {
-			return err // Added error handling
-		}
+	err = json.Unmarshal(staging, &newCommit.Files)
+	if err != nil {
+		return err
 	}
 	// Serialize the commit to JSON
 	commitBytes, err := json.Marshal(newCommit)
@@ -266,9 +307,6 @@ func commit(ipfs icore.CoreAPI, message string, ctx context.Context) error {
 	}
 	newCommit.CID = cid.Path().String()
 	// Append the new commit to the commit log
-	if err := appendToLog(newCommit); err != nil {
-		return err
-	}
 	return appendToLog(newCommit)
 }
 
@@ -343,10 +381,11 @@ func diff(ipfs icore.CoreAPI, file string, ctx context.Context) error {
 
 // Clone a repo by its CID
 func clone(ipfs icore.CoreAPI, cid string, peers []string, ctx context.Context) error {
-	if err := connectToPeers(ctx, ipfs, peers); err != nil {
+	if err := connectToPeers(ctx, ipfs, examplePeers); err != nil {
 		return fmt.Errorf("failed to connect to peers: %s", err)
 	}
 	// For demonstration, let's assume cloning involves getting content by CID.
+	// This would involve more than just printing content, like re-creating files, commit history, etc.
 	contentNode, err := ipfs.Unixfs().Get(ctx, icorepath.New(cid))
 	if err != nil {
 		return err
@@ -355,8 +394,6 @@ func clone(ipfs icore.CoreAPI, cid string, peers []string, ctx context.Context) 
 	if err != nil {
 		return err
 	}
-	// Assume content holds repo data, and reconstruct the repo from it.
-	// This would involve more than just printing content, like re-creating files, commit history, etc.
 	fmt.Printf("Cloned repo content (for demonstration): %s\n", content)
 	return nil
 }
@@ -401,22 +438,6 @@ func executeCommand(cmd string, options []string, ipfs icore.CoreAPI, service *I
 	case "clone":
 		if len(options) < 1 {
 			return fmt.Errorf("please specify a CID to clone")
-		}
-		examplePeers := []string{
-			// IPFS Bootstrapper nodes
-			"/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
-			"/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
-			"/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb",
-			"/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
-			// IPFS Cluster Pinning nodes
-			"/ip4/138.201.67.219/tcp/4001/p2p/QmUd6zHcbkbcs7SMxwLs48qZVX3vpcM8errYS7xEczwRMA",
-			"/ip4/138.201.67.219/udp/4001/quic/p2p/QmUd6zHcbkbcs7SMxwLs48qZVX3vpcM8errYS7xEczwRMA",
-			"/ip4/138.201.67.220/tcp/4001/p2p/QmNSYxZAiJHeLdkBg38roksAR9So7Y5eojks1yjEcUtZ7i",
-			"/ip4/138.201.67.220/udp/4001/quic/p2p/QmNSYxZAiJHeLdkBg38roksAR9So7Y5eojks1yjEcUtZ7i",
-			"/ip4/138.201.68.74/tcp/4001/p2p/QmdnXwLrC8p1ueiq2Qya8joNvk3TVVDAut7PrikmZwubtR",
-			"/ip4/138.201.68.74/udp/4001/quic/p2p/QmdnXwLrC8p1ueiq2Qya8joNvk3TVVDAut7PrikmZwubtR",
-			"/ip4/94.130.135.167/tcp/4001/p2p/QmUEMvxS2e7iDrereVYc5SWPauXPyNwxcy9BXZrC1QTcHE",
-			"/ip4/94.130.135.167/udp/4001/quic/p2p/QmUEMvxS2e7iDrereVYc5SWPauXPyNwxcy9BXZrC1QTcHE",
 		}
 
 		return clone(ipfs, options[0], examplePeers, ctx)
