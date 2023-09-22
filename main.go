@@ -446,49 +446,10 @@ func main() {
 	// Declare a variable for the CoreAPI
 	var ipfs icore.CoreAPI
 
-	// Handle the 'init' command separately
-	if cmd == "init" {
-		if err := ipfsService.initRepo(); err != nil {
-			log.Fatal(err)
-		}
-		return
-	}
-
-	// Check if the repository is initialized; if not, initialize it
-	if _, err := os.Stat(".ipgit"); os.IsNotExist(err) {
-		if err := ipfsService.initRepo(); err != nil {
-			log.Fatal(err)
-		}
-	}
-
-	// Check if a local IPFS repo exists; if not, create an ephemeral one
-	if _, err := os.Stat(".ipgit"); os.IsNotExist(err) {
-		// Use spawnEphemeral to get an ephemeral IPFS node
-		var err error
-		ipfs, _, err = ipfsService.spawnEphemeral(ctx)
-		if err != nil {
-			log.Fatal("Failed to spawn ephemeral IPFS node: ", err)
-		}
-	} else {
-		// Open existing IPFS repo
-		r, err := fsrepo.Open(".ipgit")
-		if err != nil {
-			log.Fatal("Failed to open existing IPFS repo: ", err)
-		}
-
-		cfg := &core.BuildCfg{
-			Repo: r,
-		}
-
-		node, err := core.NewNode(ctx, cfg)
-		if err != nil {
-			log.Fatal("Failed to create new IPFS node: ", err)
-		}
-
-		ipfs, err = coreapi.NewCoreAPI(node)
-		if err != nil {
-			log.Fatal("Failed to create new Core API: ", err)
-		}
+	// Always create an ephemeral node for this example
+	ipfs, _, err := ipfsService.spawnEphemeral(ctx)
+	if err != nil {
+		log.Fatal("Failed to spawn ephemeral IPFS node: ", err)
 	}
 
 	// Execute the command
