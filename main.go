@@ -230,17 +230,86 @@ func ensureStagingExists() error {
 	return nil
 }
 
-// Add a file to IPFS and the CID to the staging area
-func addFile(file string, ipfs icore.CoreAPI, ctx context.Context) error {
-	fileNode, err := getUnixfsNode(file)
+// NewSerialDir constructs a new files.Directory from the folder at the given path.
+func NewSerialDir(path string) (files.Directory, error) {
+	var entries []files.DirEntry
+
+	dir, err := os.Open(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	cidFile, err := ipfs.Unixfs().Add(ctx, fileNode)
+	defer dir.Close()
+
+	// Read the directory
+	fileInfos, err := dir.Readdir(-1)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
+	for _, fileInfo := range fileInfos {
+		fullPath := filepath.Join(path, fileInfo.Name())
+
+		if fileInfo.IsDir() {
+			// If it's a directory, recursively create a DirEntry for it
+			subDirNode, err := NewSerialDir(fullPath)
+			if err != nil {
+				return nil, err
+			}
+			entries = append(entries, files.FileEntry(fileInfo.Name(), subDirNode))
+		} else {
+			// If it's a file, create a FileEntry for it
+			file, err := os.Open(fullPath)
+			if err != nil {
+				return nil, err
+			}
+			// IPFS will automatically close the file once it's done reading.
+			entries = append(entries, files.FileEntry(fileInfo.Name(), files.NewReaderFile(file)))
+		}
+	}
+
+	return files.NewSliceDirectory(entries), nil
+}
+
+// Add a file or folder to IPFS and the CID to the staging area
+func addFile(path string, ipfs icore.CoreAPI, ctx context.Context) error {
+	var cidFile icorepath.Resolved
+
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		// If it's a directory, use the NewSerialDir function to get a directory node
+		dirNode, err := NewSerialDir(path)
+		if err != nil {
+			return err
+		}
+		cidFile, err = ipfs.Unixfs().Add(ctx, dirNode)
+		if err != nil {
+			return err
+		}
+		// Recursively add the contents of the directory to staging.json
+		err = addDirToStaging(path, cidFile.Cid().String(), dirNode)
+		if err != nil {
+			return err
+		}
+	} else {
+		// If it's a file, use the current logic
+		fileNode, err := getUnixfsNode(path)
+		if err != nil {
+			return err
+		}
+		cidFile, err = ipfs.Unixfs().Add(ctx, fileNode)
+		if err != nil {
+			return err
+		}
+		// Add the file's CID to the staging map and write it back
+		err = addPathToStaging(path, cidFile.Cid().String())
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// addPathToStaging adds a given path and its CID to the staging.json
+func addPathToStaging(path, cid string) error {
 	// Ensure staging.json exists
 	if err := ensureStagingExists(); err != nil {
 		return err
@@ -256,14 +325,48 @@ func addFile(file string, ipfs icore.CoreAPI, ctx context.Context) error {
 		return err
 	}
 
-	// Add the new file's CID to the staging map and write it back
-	staging[file] = cidFile.Cid().String()
+	// Add the new file's or directory's CID to the staging map and write it back
+	staging[path] = cid
 	newData, err := json.Marshal(staging)
 	if err != nil {
 		return err
 	}
-
 	return os.WriteFile(".ipgit/staging.json", newData, 0644)
+}
+
+// addDirToStaging recursively adds the contents of a directory to staging.json
+func addDirToStaging(basePath, baseCID string, dir files.Directory) error {
+	// Ensure staging.json exists
+	if err := ensureStagingExists(); err != nil {
+		return err
+	}
+
+	// Add the base directory itself to the staging
+	err := addPathToStaging(basePath, baseCID)
+	if err != nil {
+		return err
+	}
+
+	// Recursively add all child nodes (files/dirs) to staging
+	it := dir.Entries()
+	for it.Next() {
+		childPath := filepath.Join(basePath, it.Name())
+		switch entry := it.Node().(type) {
+		case files.Directory:
+			// If it's a directory, recurse into it
+			err := addDirToStaging(childPath, baseCID, entry)
+			if err != nil {
+				return err
+			}
+		case files.File:
+			// If it's a file, simply add its path to staging
+			err := addPathToStaging(childPath, baseCID)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return it.Err()
 }
 
 // Commit changes
