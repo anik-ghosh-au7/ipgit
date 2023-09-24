@@ -43,7 +43,7 @@ var examplePeers = []string{
 }
 
 // Initialize the IPFS repo
-func (service *RepoService) InitRepo() error {
+func (service *RepoService) Init() error {
 	repoPath, err := service.ipfs.CreateRepo()
 	if err != nil {
 		return fmt.Errorf("failed to initialize repo: %w", err)
@@ -132,7 +132,7 @@ func (service *RepoService) NewSerialDir(path string) (files.Directory, error) {
 }
 
 // Add a file or folder to IPFS and the CID to the staging area
-func (service *RepoService) AddFile(path string, ipfs icore.CoreAPI, ctx context.Context) error {
+func (service *RepoService) Add(path string, ipfs icore.CoreAPI, ctx context.Context) error {
 	var cidFile icorepath.Resolved
 
 	if info, err := os.Stat(path); err == nil && info.IsDir() {
@@ -371,9 +371,9 @@ func (service *RepoService) ExecuteCommand(cmd string, options []string, ipfs ic
 	// Switch case to handle each command
 	switch cmd {
 	case "init":
-		return service.InitRepo()
+		return service.Init()
 	case "add":
-		return service.AddFile(options[0], ipfs, ctx)
+		return service.Add(options[0], ipfs, ctx)
 	case "commit":
 		return service.Commit(ipfs, options[0], ctx)
 	case "status":
