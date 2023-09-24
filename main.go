@@ -18,7 +18,6 @@ func main() {
 	// Initialize the repo service with the IPFS service as a dependency
 	repoSvc := services.NewRepoService(ipfsSvc)
 
-	// A simple command handler, you can expand this as per your needs
 	if len(os.Args) < 2 {
 		fmt.Println("Please provide a command")
 		return
@@ -27,8 +26,6 @@ func main() {
 	cmd := os.Args[1]
 	options := os.Args[2:]
 
-	// For demonstration purposes, assuming the CoreAPI is required
-	// You might want to adjust this based on the actual requirements of your functions
 	ipfsCoreAPI, _, err := ipfsSvc.SpawnEphemeral(ctx)
 	if err != nil {
 		fmt.Printf("Error spawning IPFS: %s\n", err)
