@@ -297,7 +297,7 @@ func (service *RepoService) Status(ipfs icore.CoreAPI, ctx context.Context) erro
 }
 
 // View the commit log
-func (service *RepoService) ViewLog() error {
+func (service *RepoService) Log() error {
 	commits, err := service.LoadCommits()
 	if err != nil {
 		return err
@@ -379,7 +379,7 @@ func (service *RepoService) ExecuteCommand(cmd string, options []string, ipfs ic
 	case "status":
 		return service.Status(ipfs, ctx)
 	case "log":
-		return service.ViewLog()
+		return service.Log()
 	case "diff":
 		if len(options) < 1 {
 			return fmt.Errorf("please specify a file to diff")
